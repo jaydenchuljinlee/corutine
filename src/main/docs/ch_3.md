@@ -310,4 +310,78 @@ runBlocking {
 - cleanup 필요 시 → try { ... } finally { cleanup }
 - 부모 스코프 항상 적절히 관리하기
 
+---
+
+## Blocking 상황이 발생하는 경우, withContext(Dispatchers.IO)을 사용하면 안전할까?
+
+> ❌ "무조건 그렇진 않다."
+> 하지만 👉 "상황에 따라 도움은 된다."
+
+| 상황                                                  | 취소 전파                                 |
+| --------------------------------------------------- | ------------------------------------- |
+| `Thread.sleep()` 단독 사용                              | ❌ 취소 안 됨 (블로킹)                        |
+| `withContext(Dispatchers.IO)`로 감싸고 `Thread.sleep()` | ❌ 여전히 취소는 안 됨 (블로킹은 그대로)              |
+| `withContext(Dispatchers.IO)`는 무엇을 해결?              | ✅ 코루틴의 전체 시스템 지연 방지는 도움됨 (스레드 점유만 분리) |
+
+### 왜 그런가?
+
+#### ✅ ① withContext(Dispatchers.IO) 의 역할
+- 단순히 코루틴의 스레드풀을 바꿔준다
+- IO Dispatcher는 일반적으로 매우 많은 스레드를 가지므로 블로킹에 강하다
+- 즉, Blocking을 실행하는 위치를 바꿔주는 것일 뿐, 블로킹이 중단 가능해지지는 않는다
+
+```kotlin
+suspend fun blockingSleep() = withContext(Dispatchers.IO) {
+    Thread.sleep(5000)
+}
+```
+- 이 경우 Thread.sleep() 이 5초간 스레드를 점유한다
+- 다만 Default Dispatcher (CPU 바운드 풀) 를 오염시키지 않음
+
+#### ✅ ② 취소 전파는 어떻게 되나?
+- 코루틴 자체에는 취소 신호가 이미 전파됨 (job.cancel() 호출시)
+- 하지만 Thread.sleep() 은 일반 Java 블로킹 메서드 → 취소 신호를 감지하지 못함
+- 그래서 협조적 취소가 불가능하다
+
+👉 결국:
+```text
+job.cancel() → withContext(IO)는 취소 신호 전달됨 → Thread.sleep()은 취소 신호를 무시
+```
+
+| 상황                                               | 동작                                   |
+| ------------------------------------------------ | ------------------------------------ |
+| `Thread.sleep()`                                 | 스레드 완전 점유 → 취소 불가능                   |
+| `withContext(Dispatchers.IO) { Thread.sleep() }` | IO 스레드 점유 → 전체 지연은 감소하지만 취소는 여전히 불가능 |
+
+
+### 그러면 해결책은?
+
+<b>원칙:</b>
+> 블로킹 코드를 "취소 가능 코드"로 바꾸는 건 결국 "인터럽트 지원 blocking" 이 필요하다
+
+#### <b>예시: Interruptible blocking API</b>
+
+```kotlin
+withContext(Dispatchers.IO) {
+    val thread = Thread.currentThread()
+    job.invokeOnCompletion { thread.interrupt() }
+    try {
+        Thread.sleep(5000) // interrupt 되면 InterruptedException 발생
+    } catch (e: InterruptedException) {
+        println("Thread interrupted!")
+    }
+}
+```
+- 이렇게 하면 취소 시 interrupt를 날려서 강제 중단 가능
+- 단점: 모든 블로킹 라이브러리가 이런 식으로 인터럽트 대응하지 않음
+
+### 실전에서는
+
+| 상황         | 추천 패턴                                                                    |
+| ---------- | ------------------------------------------------------------------------ |
+| 블로킹 코드 존재  | `withContext(Dispatchers.IO) { ... }` 로 일단 격리                            |
+| 취소까지 지원 필요 | 블로킹 API가 인터럽트 지원 시 → `invokeOnCompletion`으로 interrupt 등록                 |
+| 완전 안전      | 블로킹 API를 suspend-friendly API로 교체 (ex: suspend retrofit, suspend jdbc 등) |
+
+
 
