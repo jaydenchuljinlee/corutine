@@ -167,3 +167,147 @@ scope.launch { ... }
 | CoroutineExceptionHandler | launch uncaught 예외 핸들러 |
 
 
+---
+
+## 📙 구조화된 동시성 심화편
+
+### ✅ 취소 전파 / Cooperative Cancellation / CancellationException
+
+| 용어                                   | 개념                           |
+| ------------------------------------ | ---------------------------- |
+| **취소 전파 (Cancellation Propagation)** | 부모가 취소되면 자식도 자동 취소           |
+| **Cooperative Cancellation**         | 자식이 스스로 취소 요청을 감지하고 협조적으로 취소 |
+| **CancellationException**            | 취소가 발생했을 때 코루틴이 받는 표준 예외     |
+
+---
+
+### ① 취소 전파 (Cancellation Propagation)
+
+#### ✅ 기본 규칙
+- 코루틴은 항상 부모-자식 관계를 가진다
+- 부모가 취소되면 → 자식 코루틴 전체에 자동으로 취소 요청이 전파된다
+
+```kotlin
+runBlocking {
+    val parent = launch {
+        launch {
+            delay(1000)
+            println("Child done")
+        }
+    }
+
+    delay(100)
+    parent.cancel()  // 부모 취소 → 자식도 취소
+}
+```
+- Child done 출력되지 않음 → 자식도 취소됨
+
+
+### ② Cooperative Cancellation (협조적 취소)
+
+#### ✅ 코루틴은 강제 종료되지 않는다
+
+- 코루틴은 기본적으로 스레드처럼 강제 중단되지 않음
+- 대신 취소 요청이 들어왔다는 신호만 받는다
+- 이 신호를 보고 스스로 종료해야 한다 → 이게 협조적(Cooperative)
+
+#### ✅ 협조적으로 취소에 참여하는 방법:
+
+| 방법               | 설명                          |
+| ---------------- | --------------------------- |
+| `suspend` 함수 호출  | 대부분의 suspend 함수는 자동으로 취소 체크 |
+| `ensureActive()` | 수동으로 활성 상태 확인               |
+| `yield()`        | 취소 체크 + 컨텍스트 양보             |
+| `isActive`       | 현재 취소 여부 확인                 |
+
+```kotlin
+runBlocking {
+    val job = launch {
+        repeat(10) { i ->
+            delay(500)
+            println("Processing $i")
+        }
+    }
+    delay(1300)
+    job.cancel()
+}
+```
+- delay()는 suspend 함수 → 내부에서 자동으로 취소 체크 수행
+- 그래서 안전하게 중단됨
+
+#### ✅ 하지만 블로킹 코드에서는 협조가 안됨
+```kotlin
+runBlocking {
+    val job = launch {
+        repeat(10) { i ->
+            Thread.sleep(500)  // ⚠️ 블로킹 → 취소 못함
+            println("Processing $i")
+        }
+    }
+    delay(1300)
+    job.cancel()
+}
+```
+- Thread.sleep() 은 suspend가 아님 → 취소 요청을 감지하지 못함 → 계속 실행됨
+- 이게 실전에서 취소가 안 먹는 이유의 90%
+
+---
+
+### ④ CancellationException
+
+#### ✅ 코루틴이 취소되면 내부적으로 CancellationException 발생
+- 취소는 항상 이 예외로 표현됨
+- 보통 개발자는 굳이 이걸 캐치하지 않아도 됨 → 자동으로 부모에게 전파됨
+
+```kotlin
+runBlocking {
+    val job = launch {
+        try {
+            delay(1000)
+        } catch (e: CancellationException) {
+            println("Cancelled!")
+        }
+    }
+
+    delay(100)
+    job.cancel()
+}
+```
+
+#### ✅ 중요한 특징:
+- CancellationException 은 정상적인 흐름으로 간주
+- 일반적인 예외와 달리 잡지 않아도 예외 로그를 찍지 않음
+- 하지만 필요한 경우 try-catch로 감싸서 취소 정리 작업을 할 수 있음 (예: 리소스 해제)
+
+---
+
+### ④ 한눈에 정리 요약
+
+| 개념         | 동작                            |
+| ---------- | ----------------------------- |
+| 부모가 취소됨    | 모든 자식에 취소 전파                  |
+| 자식이 취소됨    | 자신만 취소 (부모에는 영향 없음)           |
+| suspend 함수 | 자동으로 취소 체크                    |
+| 블로킹 함수     | 취소 감지 못함                      |
+| 취소 예외      | 항상 `CancellationException` 발생 |
+
+---
+
+### ⑤ 실전 장애 예시 (이걸 몰라서 터지는 사고들)
+
+| 잘못된 코드                                  | 장애 증상                  |
+| --------------------------------------- | ---------------------- |
+| Thread.sleep() 남발                       | 취소가 안 먹혀서 서비스가 멈춤      |
+| try-catch로 CancellationException 무조건 삼킴 | 취소 신호 무시 → Job leak 발생 |
+| 부모 Scope를 무시하고 launch 남발                | 스코프 밖에 살아남아 메모리 누수     |
+
+
+---
+
+### ⑥ 실전 안전 패턴
+
+- suspend가 아닌 blocking API → 반드시 withContext(Dispatchers.IO) 로 감싸기
+- cleanup 필요 시 → try { ... } finally { cleanup }
+- 부모 스코프 항상 적절히 관리하기
+
+
