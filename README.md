@@ -20,3 +20,4 @@
 > :pushpin: **Scope 테스트** [[CoroutineScopeTest]](https://github.com/jaydenchuljinlee/corutine/blob/main/src/test/kotlin/com/example/corutine/CoroutineScopeTest.kt)
 > - 코루틴을 사용하여 Scope 범위 체크
 
+> :pushpin: **코루틴 학습 문서** [[Directory]](https://github.com/jaydenchuljinlee/corutine/tree/main/docs)
