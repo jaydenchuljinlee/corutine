@@ -36,9 +36,13 @@
 
 
 
-## ✅ 5. Dispatcher 충돌 예시
+## ✅ 5. Dispatcher 충돌 예시 (예제 부적합)
 
 - 예시 링크 => [[ConcurrencyTest.java]](https://github.com/jaydenchuljinlee/corutine/main/src/test/kotlin/com/example/corutine/enhancement/SharedPoolDispatcherSaturationTest.kt)
   - IO에서 CPU 연산이 실행됨 → sharedPool 포화
   - Default에서 실행되어야 할 다른 연산들이 지연됨 → UI 멈춤, Kafka consumer 지연 등
+- `sharedPool에 대한 부하 실험`의 한계
+  - 코루틴은 `Dispatchers.IO`와 `Dispatchers.Default`는 내부적으로 <b>같은 CoroutineScheduler 기반의 shared pool</b>을 사용
+  - `Dispatchers.IO`는 I/O 바운드 작업 시 필요한 만큼 스레드를 계속 만들어서 부하를 흡수 가능
+  - Dispatchers.IO는 스레드를 거의 무한대로 만들어서 작업을 처리하려 하므로, 실제로 경합 상태를 만들어내기가 굉장히 어렵고, 실험이 유의미하지 않음
 
